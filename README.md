@@ -66,7 +66,7 @@ channel.queue("window.sports").bind(exchange, routingKey = "#.winter").subscribe
 
 exchange.publish("ski".getBytes, routingKey = "uk.winter")
   .publish("pug".getBytes, routingKey = "puppies")
-  .publish("tournament is happening".getBytes, routingKey = "sports.tennies.uk")
+  .publish("tournament is happening".getBytes, routingKey = "sports.tennis.uk")
 ```
 
 Doug Tangren (softprops) 2014
