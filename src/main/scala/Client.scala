@@ -5,6 +5,7 @@ import com.rabbitmq.client.{
   Consumer, Channel, DefaultConsumer, Envelope
 }
 
+/** An Exchange is a description of what a publisher may publish to */
 case class Exchange(name: String, chan: Chan) {
   def publish(
     payload: Array[Byte],
@@ -14,6 +15,10 @@ case class Exchange(name: String, chan: Chan) {
         name, routingKey, properties, payload)
 }
 
+/** A Queue is a description of what a consumer may subscribe to.
+ *  In most cases a Queue should be bound to an exchange (via bind)
+ *  before it can subscribe to messages
+ */
 case class Queue(
   name: String,
   chan: Chan,
@@ -44,12 +49,16 @@ case class Queue(
   }
 }
 
+/** A Chan provides a means of creating queues
+ *  to consume from and exchanges to publish to */
 case class Chan(underlying: Channel) {
   def queue(
     name: String,
+    durable: Boolean = false,
     autoDelete: Boolean = true,
     exclusive: Boolean = false) =
     Queue(name, this,
+          durable = durable,
           autoDelete = autoDelete,
           exclusive = exclusive)
 
