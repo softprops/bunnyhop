@@ -10,7 +10,7 @@ val exchange = queue.defaultExchange
 
 // sub
 queue.subscribe {
-  case (_, _, bytes) = handle(bytes)
+  case (_, _, bytes) => handle(bytes)
 }
 
 // pub
@@ -37,7 +37,7 @@ channel.queue("api", autoDelete = true).bind(exchange).subscribe {
   case (_, _, bytes) => handle(bytes)
 }
 
-exchange.publish("test".getBytes())
+exchange.publish("test".getBytes)
 ```
 
 topic

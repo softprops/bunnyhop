@@ -9,7 +9,7 @@ case class Exchange(name: String, chan: Chan) {
   def publish(
     payload: Array[Byte],
     routingKey: String = "",
-    properties = AMQP.BasicProperties = null) =
+    properties: AMQP.BasicProperties = null) =
       chan.underlying.basicPublish(
         name, routingKey, properties, payload)
 }
@@ -20,9 +20,15 @@ case class Queue(
   durable: Boolean = false,
   exclusive: Boolean = false,
   autoDelete: Boolean = false) {
-
   chan.underlying.queueDeclare(
     name, durable, exclusive, autoDelete, null)
+
+  def bind(ex: Exchange, routingKey: String = "") = {
+    chan.underlying.queueBind(
+      name,//chan.underlying.queueDeclare().getQueue(),
+      ex.name, routingKey)
+    this
+  }
 
   def subscribe(
     f: (Envelope, AMQP.BasicProperties, Array[Byte]) => Unit) = {
@@ -39,8 +45,13 @@ case class Queue(
 }
 
 case class Chan(underlying: Channel) {
-  def queue(name: String, autoDelete: Boolean = true) =
-    Queue(name, this, autoDelete = autoDelete)
+  def queue(
+    name: String,
+    autoDelete: Boolean = true,
+    exclusive: Boolean = false) =
+    Queue(name, this,
+          autoDelete = autoDelete,
+          exclusive = exclusive)
 
   def defaultExchange = Exchange("", this)
 
@@ -50,20 +61,19 @@ case class Chan(underlying: Channel) {
   }
 
   def topic(exchange: String) = {
-    underlying.exchangDeclare(exchange, "topic")
+    underlying.exchangeDeclare(exchange, "topic")
     Exchange(exchange, this)
   }
 
-  def bind(ex: Exchange) = {
-    underlying.queueBind(
-      underlying.queueDeclare().getQueue(),
-      ex.name, "")
-    Chan(underlying)
+  def close() {
+    underlying.close()
+    underlying.getConnection.close()
   }
 }
 
 case class Connector(host: String = "localhost") {
-  def obtain: () => Connection = new ConnectionFactory() {
+  def obtain: () => Connection =
+    () => new ConnectionFactory() {
       setHost(host)
     }.newConnection()
   def channel = Chan(obtain().createChannel())
