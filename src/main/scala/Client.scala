@@ -39,12 +39,18 @@ case class Queue(
 }
 
 case class Chan(underlying: Channel) {
-  def queue(name: String, autoDelete: Boolean = true) = Queue(name, this)
+  def queue(name: String, autoDelete: Boolean = true) =
+    Queue(name, this, autoDelete = autoDelete)
 
   def defaultExchange = Exchange("", this)
 
   def fanout(exchange: String) = {
     underlying.exchangeDeclare(exchange, "fanout")
+    Exchange(exchange, this)
+  }
+
+  def topic(exchange: String) = {
+    underlying.exchangDeclare(exchange, "topic")
     Exchange(exchange, this)
   }
 

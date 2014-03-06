@@ -49,7 +49,7 @@ val channel = Connector().channel
 
 val exchange = channel.topic("topics", autoDelete = true)
 
-channel.queue("", exclusive => true).bind(exchange, routingKey = "puppies").subscribe {
+channel.queue("", exclusive = true).bind(exchange, routingKey = "puppies").subscribe {
   case (_, _, bytes) => handle(bytes)
 }
 
