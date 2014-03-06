@@ -1,5 +1,7 @@
 # bunnyhop
 
+[![Build Status](https://travis-ci.org/softprops/bunnyhop.png?branch=master)](https://travis-ci.org/softprops/bunnyhop)
+
 ## rough sketches
 
 ```scala
