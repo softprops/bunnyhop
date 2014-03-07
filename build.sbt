@@ -13,3 +13,5 @@ libraryDependencies ++= Seq(
 crossScalaVersions := Seq("2.9.3", "2.10.3")
 
 scalaVersion := crossScalaVersions.value.head
+
+scalacOptions += Opts.compile.deprecation

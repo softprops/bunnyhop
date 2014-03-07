@@ -1,9 +1,12 @@
 package bunnyhop
 
 import com.rabbitmq.client.{
-  AMQP, ConnectionFactory, Connection,
-  Consumer, Channel, DefaultConsumer, Envelope
+  AMQP, BlockedListener, ConnectionFactory, Connection,
+  Consumer, Channel, DefaultConsumer, Envelope,
+  ShutdownListener, ShutdownSignalException
 }
+
+import scala.concurrent.duration.FiniteDuration
 
 /** An Exchange is a description of what a publisher may publish to */
 case class Exchange(name: String, chan: Chan) {
@@ -30,8 +33,7 @@ case class Queue(
 
   def bind(ex: Exchange, routingKey: String = "") = {
     chan.underlying.queueBind(
-      name,//chan.underlying.queueDeclare().getQueue(),
-      ex.name, routingKey)
+      name, ex.name, routingKey)
     this
   }
 
@@ -50,8 +52,16 @@ case class Queue(
 }
 
 /** A Chan provides a means of creating queues
- *  to consume from and exchanges to publish to */
+ *  to consume from and exchanges to publish to
+ * todo: http://www.rabbitmq.com/javadoc/com/rabbitmq/client/BlockedListener.html
+ * todo: http://www.rabbitmq.com/javadoc/com/rabbitmq/client/ShutdownListener.html */
 case class Chan(underlying: Channel) {
+
+  def isOpen: Boolean = underlying.isOpen
+
+  def closeReason: ShutdownSignalException =
+    underlying.getCloseReason
+
   def queue(
     name: String,
     durable: Boolean = false,
@@ -80,10 +90,60 @@ case class Chan(underlying: Channel) {
   }
 }
 
-case class Connector(host: String = "localhost") {
+case class Credentials(username: String, password: String)
+
+case class Connector(
+  host: String = "localhost",
+  port: Int = 5672,
+  uri: Option[String] = None,
+  connectionTimeout: Option[FiniteDuration] = None,
+  requestHeartbeat: Option[FiniteDuration] = None,
+  maxChannels: Option[Int] = None,
+  maxFrameSize: Option[Int] = None,
+  credentials: Option[Credentials] = None,
+  shutdownHandlers: List[ShutdownSignalException => Unit] = Nil,
+  blockHandlers: List[String => Unit] = Nil,
+  unblockHandlers: List[() => Unit] = Nil) {
+
+  def onShutdown(f : ShutdownSignalException => Unit) =
+   copy(shutdownHandlers = f :: shutdownHandlers)
+
+  def onBlocked(f: String => Unit) =
+    copy(blockHandlers = f :: blockHandlers)
+
+  def onUnblock(f: () => Unit) =
+    copy(unblockHandlers = f :: unblockHandlers)
+
   def obtain: () => Connection =
-    () => new ConnectionFactory() {
-      setHost(host)
-    }.newConnection()
+    () => {
+      val conn = new ConnectionFactory() {
+        uri.map(setUri(_)).getOrElse {
+          setHost(host)
+          setPort(port)
+        }
+        connectionTimeout.foreach(to => setRequestedHeartbeat(to.toSeconds.toInt))
+        requestHeartbeat.foreach(hb => setRequestedHeartbeat(hb.toSeconds.toInt))
+        maxChannels.foreach(setRequestedChannelMax(_))
+        maxFrameSize.foreach(setRequestedFrameMax(_))
+        credentials.foreach {
+          case Credentials(user, pass) =>
+            setUsername(user)
+          setPassword(pass)
+        }
+      }.newConnection()
+      shutdownHandlers.foreach(f => conn.addShutdownListener(new ShutdownListener {
+        def shutdownCompleted(cause: ShutdownSignalException) = f(cause)
+      }))
+      blockHandlers.foreach(f => conn.addBlockedListener(new BlockedListener {
+        def handleBlocked(reason: String) = f(reason)
+        def handleUnblocked { }
+      }))
+      unblockHandlers.foreach(f => conn.addBlockedListener(new BlockedListener {
+        def handleBlocked(reason: String) { }
+        def handleUnblocked = f()
+      }))
+      conn
+    }
+
   def channel = Chan(obtain().createChannel())
 }
