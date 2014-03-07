@@ -1,8 +1,8 @@
 package bunnyhop
 
 import com.rabbitmq.client.{
-  AMQP, BlockedListener, ConnectionFactory, Connection,
-  Consumer, Channel, DefaultConsumer, Envelope,
+  AMQP, BlockedListener, ConfirmListener, ConnectionFactory, Connection,
+  Consumer, Channel, DefaultConsumer, Envelope, ReturnListener,
   ShutdownListener, ShutdownSignalException
 }
 
@@ -51,11 +51,36 @@ case class Queue(
   }
 }
 
+sealed trait Confirm
+object Confirm {
+  case class Ack(tag: Long, multiple: Boolean) extends Confirm
+  case class Nack(tag: Long, multiple: Boolean) extends Confirm
+}
+
 /** A Chan provides a means of creating queues
- *  to consume from and exchanges to publish to
- * todo: http://www.rabbitmq.com/javadoc/com/rabbitmq/client/BlockedListener.html
- * todo: http://www.rabbitmq.com/javadoc/com/rabbitmq/client/ShutdownListener.html */
-case class Chan(underlying: Channel) {
+ *  to consume from and exchanges to publish to */
+case class Chan(
+  underlying: Channel,
+  confirmListeners: List[Confirm => Unit] = Nil,
+  returnListeners: List[(Int, String, String, String, AMQP.BasicProperties, Array[Byte]) => Unit] = Nil) {
+
+  def onConfirm(f: Confirm => Unit): Chan = {
+    underlying.addConfirmListener(new ConfirmListener {
+      def handleAck(tag: Long, multiple: Boolean) = f(Confirm.Ack(tag, multiple))
+      def handleNack(tag: Long, multiple: Boolean) = f(Confirm.Nack(tag, multiple))
+    })
+    copy(confirmListeners = f :: confirmListeners)
+  }
+
+  def onReturn(f: (Int, String, String, String, AMQP.BasicProperties, Array[Byte]) => Unit): Chan = {
+    underlying.addReturnListener(new ReturnListener {
+      def handleReturn(
+        replyCode: Int, replyText: String,
+        exchange: String, routingKey: String, props:AMQP.BasicProperties, body: Array[Byte]) =
+          f(replyCode, replyText, exchange, routingKey, props, body)
+    })
+    copy(returnListeners = f :: returnListeners)
+  }
 
   def isOpen: Boolean = underlying.isOpen
 
@@ -84,6 +109,8 @@ case class Chan(underlying: Channel) {
     Exchange(exchange, this)
   }
 
+  def abort() = underlying.abort()
+
   def close() {
     underlying.close()
     underlying.getConnection.close()
@@ -105,7 +132,7 @@ case class Connector(
   blockHandlers: List[String => Unit] = Nil,
   unblockHandlers: List[() => Unit] = Nil) {
 
-  def onShutdown(f : ShutdownSignalException => Unit) =
+  def onShutdown(f: ShutdownSignalException => Unit) =
    copy(shutdownHandlers = f :: shutdownHandlers)
 
   def onBlocked(f: String => Unit) =
