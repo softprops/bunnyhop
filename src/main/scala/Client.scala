@@ -6,7 +6,9 @@ import com.rabbitmq.client.{
   ShutdownListener, ShutdownSignalException
 }
 
+import scala.util.control.NonFatal
 import scala.concurrent.duration.FiniteDuration
+import java.util.concurrent.atomic.AtomicReference
 
 /** An Exchange is a description of what a publisher may publish to */
 case class Exchange(name: String, chan: Chan) {
@@ -27,26 +29,41 @@ case class Queue(
   chan: Chan,
   durable: Boolean = false,
   exclusive: Boolean = false,
-  autoDelete: Boolean = false) {
+  autoDelete: Boolean = false,
+  binding: Option[(Exchange, String)] = None) {
+
   chan.underlying.queueDeclare(
     name, durable, exclusive, autoDelete, null)
 
   def bind(ex: Exchange, routingKey: String = "") = {
     chan.underlying.queueBind(
       name, ex.name, routingKey)
-    this
+    copy(binding = Some(ex, routingKey))
   }
 
+  /** subscribe to incoming messages. shutdown signals not initiated by the application
+   *  will trigger a reconnect attempt, rebinding, and resubscription automatically.
+   *  messages will be ack(nowledg)ed after function f completes
+   */
   def subscribe(
-    f: (Envelope, AMQP.BasicProperties, Array[Byte]) => Unit) = {
+    f: (Envelope, AMQP.BasicProperties, Array[Byte]) => Unit): Unit = {
     chan.underlying.basicConsume(
       name, false/*auto ack*/,
       new DefaultConsumer(chan.underlying) {
         override def handleDelivery(
           consumerTag: String, envelope: Envelope,
           props: AMQP.BasicProperties, body: Array[Byte]) {
-            f(envelope, props, body)
+            try f(envelope, props, body) finally {
+              chan.ack(envelope.getDeliveryTag, false)
+            }
         }
+        override def handleShutdownSignal(tag: String, sig: ShutdownSignalException) =
+          if (!sig.isInitiatedByApplication) {
+            // attempt to reconnect, rebind, & resubscribe
+            val fresh = copy()
+            binding.map { case (ex, routing) => fresh.bind(ex, routing) }
+                   .getOrElse(fresh).subscribe(f)
+          }
       }) 
   }
 }
@@ -109,6 +126,9 @@ case class Chan(
     Exchange(exchange, this)
   }
 
+  def ack(tag: Long, multiple: Boolean) =
+    underlying.basicAck(tag, multiple)
+
   def abort() = underlying.abort()
 
   def close() {
@@ -123,6 +143,7 @@ case class Connector(
   host: String = "localhost",
   port: Int = 5672,
   uri: Option[String] = None,
+  vhost: Option[String] = None,
   connectionTimeout: Option[FiniteDuration] = None,
   requestHeartbeat: Option[FiniteDuration] = None,
   maxChannels: Option[Int] = None,
@@ -131,6 +152,25 @@ case class Connector(
   shutdownHandlers: List[ShutdownSignalException => Unit] = Nil,
   blockHandlers: List[String => Unit] = Nil,
   unblockHandlers: List[() => Unit] = Nil) {
+
+  private[this] val connectionRef = new AtomicReference[Connection]()
+
+  private[this] lazy val factory = new ConnectionFactory() {
+    uri.map(setUri(_)).getOrElse {
+      setHost(host)
+      setPort(port)
+    }
+    vhost.foreach(setVirtualHost(_))
+    connectionTimeout.foreach(to => setRequestedHeartbeat(to.toSeconds.toInt))
+    requestHeartbeat.foreach(hb => setRequestedHeartbeat(hb.toSeconds.toInt))
+    maxChannels.foreach(setRequestedChannelMax(_))
+    maxFrameSize.foreach(setRequestedFrameMax(_))
+    credentials.foreach {
+      case Credentials(user, pass) =>
+        setUsername(user)
+        setPassword(pass)
+    }
+  }
 
   def onShutdown(f: ShutdownSignalException => Unit) =
    copy(shutdownHandlers = f :: shutdownHandlers)
@@ -141,36 +181,40 @@ case class Connector(
   def onUnblock(f: () => Unit) =
     copy(unblockHandlers = f :: unblockHandlers)
 
+  private def addHandlers(conn: Connection) = {
+    shutdownHandlers.foreach(f => conn.addShutdownListener(new ShutdownListener {
+      def shutdownCompleted(cause: ShutdownSignalException) = f(cause)
+    }))
+    blockHandlers.foreach(f => conn.addBlockedListener(new BlockedListener {
+      def handleBlocked(reason: String) = f(reason)
+      def handleUnblocked { }
+    }))
+    unblockHandlers.foreach(f => conn.addBlockedListener(new BlockedListener {
+      def handleBlocked(reason: String) { }
+      def handleUnblocked = f()
+    }))
+    conn
+  }
+
   def obtain: () => Connection =
     () => {
-      val conn = new ConnectionFactory() {
-        uri.map(setUri(_)).getOrElse {
-          setHost(host)
-          setPort(port)
+      val conn = connectionRef.get()
+      if (conn == null || !conn.isOpen) {
+        val newConn = factory.newConnection()
+        if (connectionRef.compareAndSet(conn, newConn)) addHandlers(newConn) else {
+          newConn.abort()
+          obtain()
         }
-        connectionTimeout.foreach(to => setRequestedHeartbeat(to.toSeconds.toInt))
-        requestHeartbeat.foreach(hb => setRequestedHeartbeat(hb.toSeconds.toInt))
-        maxChannels.foreach(setRequestedChannelMax(_))
-        maxFrameSize.foreach(setRequestedFrameMax(_))
-        credentials.foreach {
-          case Credentials(user, pass) =>
-            setUsername(user)
-          setPassword(pass)
-        }
-      }.newConnection()
-      shutdownHandlers.foreach(f => conn.addShutdownListener(new ShutdownListener {
-        def shutdownCompleted(cause: ShutdownSignalException) = f(cause)
-      }))
-      blockHandlers.foreach(f => conn.addBlockedListener(new BlockedListener {
-        def handleBlocked(reason: String) = f(reason)
-        def handleUnblocked { }
-      }))
-      unblockHandlers.foreach(f => conn.addBlockedListener(new BlockedListener {
-        def handleBlocked(reason: String) { }
-        def handleUnblocked = f()
-      }))
-      conn
+      } else conn
     }
 
-  def channel = Chan(obtain().createChannel())
+  def channel: Chan = {
+    def await(attempt: Int = 0): Chan =
+      try Chan(obtain().createChannel()) catch {
+        case NonFatal(_) =>
+          Thread.sleep(attempt * attempt * 1000)
+          await(attempt + 1)
+      }
+    await()
+  }
 }
