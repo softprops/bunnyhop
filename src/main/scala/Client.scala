@@ -121,8 +121,17 @@ case class Chan(
     Exchange(exchange, this)
   }
 
+  /** a message sent with a particular routing key will be delivered
+   *  to all the queues that are bound with a matching binding key */
   def topic(exchange: String) = {
     underlying.exchangeDeclare(exchange, "topic")
+    Exchange(exchange, this)
+  }
+
+  /** a message goes to the queues whose binding key exactly
+   *  matches the routing key of the message. */
+  def direct(exchanging: String) = {
+    underlying.exchangeDeclare(exchange, "direct")
     Exchange(exchange, this)
   }
 
