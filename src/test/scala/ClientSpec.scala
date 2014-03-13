@@ -37,6 +37,25 @@ class ClientSpec extends FunSpec {
       chan.close()
     }
 
+    it ("should support direct pub/sub") {
+      val chan  = Connector().channel
+      val ex    = chan.direct("dir")
+      val latch = new CountDownLatch(2)
+      chan.queue("", autoDelete = true).bind(ex, routingKey = "a")
+        .subscribe {
+          case (_, _, _) => latch.countDown()
+        }
+      chan.queue("", autoDelete = true).bind(ex, routingKey = "b")
+        .subscribe {
+          case (_, _, _) => latch.countDown()
+        }
+      val msg = "test".getBytes
+      ex.publish(msg, routingKey = "a")
+      ex.publish(msg, routingKey = "b")
+      latch.await()
+      chan.close()
+    }
+
     it ("should support topic pub/sub") {
       val chan  = Connector().channel
       val ex    = chan.topic("tops")
@@ -66,8 +85,9 @@ class ClientSpec extends FunSpec {
         .subscribe {
           case (_, _, _) => latch.countDown()
         }
-      ex.publish("test".getBytes, routingKey = "a")
-      ex.publish("test".getBytes, routingKey = "b")
+      val msg = "test".getBytes
+      ex.publish(msg, routingKey = "a")
+      ex.publish(msg, routingKey = "b")
       latch.await()
       chan.close()
     }
