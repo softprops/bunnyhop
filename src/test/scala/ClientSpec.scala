@@ -57,5 +57,19 @@ class ClientSpec extends FunSpec {
       latch.await()
       chan.close()
     }
+
+    it ("should support multiple routing key bindings") {
+      val chan = Connector().channel
+      val ex   = chan.topic("multi")
+      val latch = new CountDownLatch(2)
+      chan.queue("bar").bind(ex, routingKey = "a").bind(ex, routingKey = "b")
+        .subscribe {
+          case (_, _, _) => latch.countDown()
+        }
+      ex.publish("test".getBytes, routingKey = "a")
+      ex.publish("test".getBytes, routingKey = "b")
+      latch.await()
+      chan.close()
+    }
   }
 }
