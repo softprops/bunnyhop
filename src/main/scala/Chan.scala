@@ -52,23 +52,21 @@ case class Chan(
 
   def defaultExchange = Exchange("", this)
 
-  def fanout(exchange: String) = {
-    underlying.exchangeDeclare(exchange, "fanout")
-    Exchange(exchange, this)
-  }
+  def fanout(name: String) = exchange(name, "fanout")
 
   /** a message sent with a particular routing key will be delivered
    *  to all the queues that are bound with a matching binding key */
-  def topic(exchange: String) = {
-    underlying.exchangeDeclare(exchange, "topic")
-    Exchange(exchange, this)
-  }
+  def topic(name: String) = exchange(name, "topic")
 
   /** a message goes to the queues whose binding key exactly
    *  matches the routing key of the message. */
-  def direct(exchange: String) = {
-    underlying.exchangeDeclare(exchange, "direct")
-    Exchange(exchange, this)
+  def direct(name: String) = exchange(name, "direct")
+
+  def headers(name: String) = exchange(name, "headers")
+
+  def exchange(name: String, kind: String) = {
+    underlying.exchangeDeclare(name, kind)
+    Exchange(name, this)
   }
 
   def ack(tag: Long, multiple: Boolean) =

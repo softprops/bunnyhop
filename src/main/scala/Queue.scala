@@ -5,8 +5,14 @@ import com.rabbitmq.client.{
 }
 
 import scala.util.control.NonFatal
+import scala.collection.JavaConverters._
 import scala.concurrent.duration.FiniteDuration
+import java.util.{ Map => JMap }
 import java.util.concurrent.atomic.AtomicReference
+
+object Queue {
+  type Binding = (Exchange, String, Map[String, Any])
+}
 
 /** A Queue is a description of what a consumer may subscribe to.
  *  In most cases a Queue should be bound to an exchange (via bind)
@@ -18,15 +24,20 @@ case class Queue(
   durable: Boolean = false,
   exclusive: Boolean = false,
   autoDelete: Boolean = false,
-  bindings: List[(Exchange, String)] = Nil) {
+  arguments: Map[String, Any] = Map.empty[String, Any],
+  bindings: List[Queue.Binding] = Nil) {
 
   chan.underlying.queueDeclare(
-    name, durable, exclusive, autoDelete, null)
+    name, durable, exclusive, autoDelete,
+    arguments.asJava.asInstanceOf[JMap[String, Object]])
 
-  def bind(ex: Exchange, routingKey: String = "") = {
+  def bind(
+    ex: Exchange, routingKey: String = "",
+    arguments: Map[String, Any] = Map.empty[String, Any]) = {
     chan.underlying.queueBind(
-      name, ex.name, routingKey)
-    copy(bindings = (ex, routingKey) :: Nil)
+      name, ex.name, routingKey,
+      arguments.asJava.asInstanceOf[JMap[String, Object]])
+    copy(bindings = (ex, routingKey, arguments) :: Nil)
   }
 
   /** subscribe to incoming messages. shutdown signals not initiated by the application
@@ -49,8 +60,8 @@ case class Queue(
           if (!sig.isInitiatedByApplication) {
             // attempt to reconnect, rebind, & resubscribe
             ((copy() /: bindings) {
-              case (q, (ex, routing)) =>
-                q.bind(ex, routing)
+              case (q, (ex, routing, args)) =>
+                q.bind(ex, routing, args)
             }).subscribe(f)
           }
       }) 
